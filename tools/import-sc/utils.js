@@ -71,7 +71,9 @@ export async function loadSchemas(org, site, token) {
 
   try {
     const prefix = site ? `/${org}/${site}` : `/${org}`;
-    const schemasUrl = `https://admin.da.page/list${prefix}/.da/schemas`;
+    const schemasUrl = `https://admin.da.page/list${prefix}/.da/forms/schemas`;
+    
+    console.log('Loading schemas from:', schemasUrl);
 
     const response = await fetch(schemasUrl, {
       headers: { 'Authorization': `Bearer ${token}` },
@@ -84,18 +86,19 @@ export async function loadSchemas(org, site, token) {
     const data = await response.json();
     const schemas = {};
 
-    if (data.children && Array.isArray(data.children)) {
-      data.children.forEach(child => {
-        if (child.name && child.name.endsWith('.json')) {
-          const schemaName = child.name.replace('.json', '');
-          schemas[schemaName] = {
-            name: schemaName,
-            path: child.path,
-            modified: child.modified,
+    if (Array.isArray(data)) {
+      data.forEach(item => {
+        if (item.name && item.ext === 'html') {
+          schemas[item.name] = {
+            name: item.name,
+            path: item.path,
+            modified: item.lastModified,
           };
         }
       });
     }
+
+    console.log('Loaded schemas:', schemas);
 
     return { success: true, schemas };
   } catch (error) {
