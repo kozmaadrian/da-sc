@@ -116,6 +116,12 @@ label {
   color: #292929;
 }
 
+label::after {
+  content: " *";
+  color: #d32f2f;
+  font-weight: 700;
+}
+
 .label-hint {
   font-size: 12px;
   font-weight: 400;

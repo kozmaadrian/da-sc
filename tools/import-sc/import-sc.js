@@ -1,13 +1,10 @@
 import { html, LitElement } from 'https://da.live/nx/deps/lit/lit-core.min.js';
 import DA_SDK from 'https://da.live/nx/utils/sdk.js';
 import getStyle from 'https://da.live/nx/utils/styles.js';
-import {
-  validateJSON,
-  generateStructuredHTML,
-  loadSchemas,
-  importToDA,
-  areRequiredFieldsFilled,
-} from './utils.js';
+import { debounce } from './utils/helpers.js';
+import { validateAgainstSchema } from './utils/validators.js';
+import { generateStructuredHTML } from './utils/html-generator.js';
+import { loadSchemas, fetchSchema, importToDA } from './utils/api.js';
 
 // Import CodeMirror
 import { EditorState } from 'https://esm.sh/@codemirror/state@6';
@@ -31,6 +28,10 @@ class ImportStructuredContent extends LitElement {
     _schemas: { state: true },
     _alert: { state: true },
     _editor: { state: true },
+    _org: { state: true },
+    _site: { state: true },
+    _documentPath: { state: true },
+    _schemaName: { state: true },
   };
 
   constructor() {
@@ -38,6 +39,13 @@ class ImportStructuredContent extends LitElement {
     this._schemas = {};
     this._alert = null;
     this._editor = null;
+    this._org = '';
+    this._site = '';
+    this._documentPath = '';
+    this._schemaName = '';
+
+    // Create debounced schema loader (500ms delay)
+    this.debouncedLoadSchemas = debounce(() => this.loadSchemas(), 500);
   }
 
   connectedCallback() {
@@ -59,10 +67,9 @@ class ImportStructuredContent extends LitElement {
    * Updates component state with schemas or error message
    */
   async loadSchemas() {
-    const org = this._context?.org;
-    const site = this._context?.repo;
+    if (!this._org || !this._site) return;
 
-    const result = await loadSchemas(org, site, this._token);
+    const result = await loadSchemas(this._org, this._site, this._token);
 
     if (result.success) {
       this._schemas = result.schemas;
@@ -70,7 +77,21 @@ class ImportStructuredContent extends LitElement {
         this._alert = { type: 'warning', message: 'No schemas found' };
       }
     } else {
-      this._alert = { type: 'error', message: result.error || 'Failed to load schemas' };
+      this._alert = { type: 'error', message: result.error };
+    }
+  }
+
+  /**
+   * Handles input field changes
+   * @param {string} field - Field name
+   * @param {string} value - Field value
+   */
+  handleFieldChange(field, value) {
+    this[`_${field}`] = value;
+
+    // Reload schemas if org or site changes (debounced)
+    if (field === 'org' || field === 'site') {
+      this.debouncedLoadSchemas();
     }
   }
 
@@ -122,53 +143,105 @@ class ImportStructuredContent extends LitElement {
   }
 
   /**
-   * Validates JSON content and displays result
+   * Formats validation errors for display
    */
-  validateJSON() {
-    const jsonData = this.getEditorContent();
-    const result = validateJSON(jsonData);
+  formatValidationErrors(errors) {
+    return errors.map(err => ({
+      path: err.path && err.path !== '#' ? err.path : 'Root',
+      message: err.message
+    }));
+  }
 
-    if (result.valid) {
-      this._alert = { type: 'success', message: 'JSON is valid!' };
+  /**
+   * Validates JSON against selected schema
+   * @returns {Promise<{valid: boolean, data?: object, errors?: array}>}
+   */
+  async performValidation() {
+    if (!this._schemaName) {
+      return { valid: false, error: 'Please select a schema first' };
+    }
+
+    const schema = this._schemas[this._schemaName];
+    if (!schema) {
+      return { valid: false, error: 'Selected schema not found' };
+    }
+
+    const schemaResult = await fetchSchema(schema.path, this._token);
+    if (!schemaResult.success) {
+      return { valid: false, error: `Failed to load schema: ${schemaResult.error}` };
+    }
+
+    const jsonData = this.getEditorContent();
+    const validationResult = validateAgainstSchema(jsonData, schemaResult.schema);
+
+    if (!validationResult.valid) {
+      if (validationResult.errors) {
+        return {
+          valid: false,
+          errors: this.formatValidationErrors(validationResult.errors)
+        };
+      }
+      return { valid: false, error: validationResult.error };
+    }
+
+    return { valid: true, data: validationResult.data };
+  }
+
+  /**
+   * Handles validate button click
+   * Validates JSON against schema without importing
+   */
+  async handleValidate() {
+    this._alert = { type: 'info', message: 'Validating against schema...' };
+    const validation = await this.performValidation();
+
+    if (validation.valid) {
+      this._alert = { type: 'success', message: 'JSON is valid and matches the schema!' };
+    } else if (validation.errors) {
+      this._alert = {
+        type: 'error',
+        message: 'Schema validation failed:',
+        errors: validation.errors
+      };
     } else {
-      this._alert = { type: 'error', message: `Invalid JSON: ${result.error}` };
+      this._alert = { type: 'error', message: validation.error };
     }
   }
 
   /**
    * Handles form submission
-   * Validates JSON, generates HTML, and imports to DA
+   * Validates JSON against schema, generates HTML, and imports to DA
    * @param {Event} event - Form submit event
    */
   async handleSubmit(event) {
     event.preventDefault();
-    const formData = new FormData(event.target);
-    const jsonDataText = this.getEditorContent();
 
-    // Validate JSON
-    const jsonValidation = validateJSON(jsonDataText);
-    if (!jsonValidation.valid) {
-      this._alert = { type: 'error', message: `Invalid JSON: ${jsonValidation.error}` };
+    this._alert = { type: 'info', message: 'Validating against schema...' };
+    const validation = await this.performValidation();
+
+    if (!validation.valid) {
+      if (validation.errors) {
+        this._alert = {
+          type: 'error',
+          message: 'Schema validation failed:',
+          errors: validation.errors
+        };
+      } else {
+        this._alert = { type: 'error', message: validation.error };
+      }
       return;
     }
 
-    this._alert = { type: 'info', message: 'Processing import...' };
+    this._alert = { type: 'info', message: 'Importing content...' };
 
-    // Generate HTML content
-    const schemaName = formData.get('schemaName');
-    const htmlContent = generateStructuredHTML(schemaName, jsonValidation.data);
-
-    // Import to DA
-    const org = formData.get('org');
-    const site = formData.get('site');
-    const pageUrl = formData.get('pageUrl');
-
-    const result = await importToDA(org, site, pageUrl, htmlContent, this._token);
+    const htmlContent = generateStructuredHTML(this._schemaName, validation.data);
+    const result = await importToDA(this._org, this._site, this._documentPath, htmlContent, this._token);
 
     if (result.success) {
       this._alert = {
         type: 'success',
-        message: `Content imported successfully! <a href="${result.url}" target="_blank">View it</a>`
+        message: 'Content imported successfully! ',
+        link: { url: result.url, text: 'View in Editor' }
       };
     } else {
       this._alert = { type: 'error', message: `Import failed: ${result.error}` };
@@ -177,31 +250,30 @@ class ImportStructuredContent extends LitElement {
 
 
   /**
+   * Determines if validate button should be enabled
+   */
+  get canValidate() {
+    return Object.keys(this._schemas).length > 0
+      && this._org?.trim()
+      && this._site?.trim()
+      && this._documentPath?.trim()
+      && this._schemaName?.trim()
+      && this.getEditorContent()?.trim();
+  }
+
+  /**
    * Determines if import button should be enabled
-   * Checks schemas availability, form fields, and JSON validity
-   * @returns {boolean} True if import is allowed
    */
   get canImport() {
-    // Check schemas are available
-    if (Object.keys(this._schemas).length === 0) return false;
+    if (!this.canValidate) return false;
 
-    // Get form field values
-    const form = this.shadowRoot?.querySelector('form');
-    if (!form) return false;
-
-    const fields = {
-      org: form.querySelector('#org')?.value,
-      site: form.querySelector('#site')?.value,
-      pageUrl: form.querySelector('#page-url')?.value,
-      schemaName: form.querySelector('#schema-name')?.value,
-    };
-
-    // Check all required fields are filled
-    if (!areRequiredFieldsFilled(fields)) return false;
-
-    // Validate JSON content
-    const jsonContent = this.getEditorContent();
-    return validateJSON(jsonContent).valid;
+    // Import requires valid JSON syntax
+    try {
+      JSON.parse(this.getEditorContent());
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -211,70 +283,82 @@ class ImportStructuredContent extends LitElement {
   renderAlert() {
     if (!this._alert) return '';
 
-    const { type, message } = this._alert;
+    const { type, message, errors, link } = this._alert;
+
     return html`
       <div class="alert alert-${type}">
-        <div class="alert-content">${message}</div>
+        <div class="alert-content">
+          ${message}
+          ${errors ? html`
+            <div style="margin-top: 8px;">
+              ${errors.map(err => html`
+                <div><strong>${err.path}:</strong> ${err.message}</div>
+              `)}
+            </div>
+          ` : ''}
+          ${link ? html`<a href="${link.url}" target="_blank">${link.text}</a>` : ''}
+        </div>
       </div>
     `;
   }
 
   /**
-   * Renders schema dropdown options
-   * @param {Array<string>} schemaNames - Array of schema names
-   * @returns {Array<TemplateResult>} Array of option templates
+   * Renders a form input field
    */
-  renderSchemaOptions(schemaNames) {
-    return schemaNames.map(name => html`<option value="${name}">${name}</option>`);
-  }
-
-  /**
-   * Renders schema hint message based on count
-   * @param {number} count - Number of available schemas
-   * @returns {TemplateResult} Hint template
-   */
-  renderSchemaHint(count) {
-    if (count === 0) {
-      return html`
-        <span class="label-hint hint-warning">
-          No schemas found. Please <a href="https://da.live/apps/schema" target="_blank">create a schema</a> first.
-        </span>
-      `;
-    }
-
+  renderInput(id, label, value, placeholder = '', hint = '') {
     return html`
-      <span class="label-hint">${count} schema${count > 1 ? 's' : ''} available</span>
+      <div class="form-group">
+        <label for="${id}">${label}</label>
+        <input 
+          type="text" 
+          id="${id}" 
+          name="${id}"
+          .value=${value}
+          placeholder="${placeholder}"
+          @input=${(e) => this.handleFieldChange(id, e.target.value)}
+          required 
+        />
+        ${hint ? html`<span class="label-hint">${hint}</span>` : ''}
+      </div>
     `;
   }
 
   /**
-   * Renders complete schema select component
-   * @returns {TemplateResult} Schema select template
+   * Renders schema select dropdown
    */
   renderSchemaSelect() {
     const schemaNames = Object.keys(this._schemas).sort();
     const hasSchemas = schemaNames.length > 0;
+    const hint = hasSchemas
+      ? `${schemaNames.length} schema${schemaNames.length > 1 ? 's' : ''} available`
+      : html`No schemas found. Verify that the Organization and Site are correct, or <a href="https://da.live/apps/schema" target="_blank">create a schema</a> first.`;
 
     return html`
-      <select 
-        id="schema-name" 
-        name="schemaName" 
-        @change=${() => this.requestUpdate()}
-        ?disabled=${!hasSchemas}
-        required
-      >
-        ${hasSchemas
-        ? this.renderSchemaOptions(schemaNames)
+      <div class="form-group">
+        <label for="schema-name">Schema Name</label>
+        <select 
+          id="schema-name" 
+          name="schemaName"
+          .value=${this._schemaName}
+          @change=${(e) => this.handleFieldChange('schemaName', e.target.value)}
+          ?disabled=${!hasSchemas}
+          required
+        >
+          ${hasSchemas
+        ? html`
+                <option value="">Select a schema...</option>
+                ${schemaNames.map(name => html`<option value="${name}">${name}</option>`)}
+              `
         : html`<option value="">No schemas available</option>`
       }
-      </select>
-      ${this.renderSchemaHint(schemaNames.length)}
+        </select>
+        <span class="label-hint ${hasSchemas ? '' : 'hint-warning'}">${hint}</span>
+      </div>
     `;
   }
 
   /**
    * Renders the main component template
-   * @returns {TemplateResult} Main template
    */
   render() {
     return html`
@@ -286,48 +370,12 @@ class ImportStructuredContent extends LitElement {
         <main>
           <form @submit=${this.handleSubmit}>
             <div class="form-row">
-              <div class="form-group">
-                <label for="org">Organization</label>
-                <input 
-                  type="text" 
-                  id="org" 
-                  name="org" 
-                  @input=${() => this.requestUpdate()}
-                  required 
-                />
-                <span class="label-hint">Target organization</span>
-              </div>
-
-              <div class="form-group">
-                <label for="site">Site</label>
-                <input 
-                  type="text" 
-                  id="site" 
-                  name="site" 
-                  @input=${() => this.requestUpdate()}
-                  required 
-                />
-                <span class="label-hint">Target site</span>
-              </div>
+              ${this.renderInput('org', 'Organization', this._org, 'name-of-organization', 'Target organization')}
+              ${this.renderInput('site', 'Site', this._site, 'name-of-site', 'Target site')}
             </div>
 
-            <div class="form-group">
-              <label for="page-url">Page URL</label>
-              <input 
-                type="text" 
-                id="page-url" 
-                name="pageUrl" 
-                placeholder="/forms/my-content" 
-                @input=${() => this.requestUpdate()}
-                required 
-              />
-              <span class="label-hint">Path where the content will be saved</span>
-            </div>
-
-            <div class="form-group">
-              <label for="schema-name">Schema Name</label>
-              ${this.renderSchemaSelect()}
-            </div>
+            ${this.renderInput('documentPath', 'Document Path', this._documentPath, '/forms/my-content', 'Path where the content will be saved')}
+            ${this.renderSchemaSelect()}
 
             <div class="form-group">
               <label for="json-data">JSON Data</label>
@@ -336,7 +384,7 @@ class ImportStructuredContent extends LitElement {
             </div>
 
             <div class="form-actions">
-              <button type="button" class="btn btn-secondary" @click=${this.validateJSON}>Validate JSON</button>
+              <button type="button" class="btn btn-secondary" @click=${this.handleValidate} ?disabled=${!this.canValidate}>Validate</button>
               <button type="submit" class="btn btn-primary" ?disabled=${!this.canImport}>Import</button>
             </div>
 
