@@ -196,12 +196,16 @@ class ImportStructuredContent extends LitElement {
     const validation = await this.performValidation();
 
     if (validation.valid) {
-      this._alert = { type: 'success', message: 'JSON is valid and matches the schema!' };
+      this._alert = { type: 'success', message: `JSON is valid and matches the "${this._schemaName}" schema!` };
     } else if (validation.errors) {
       this._alert = {
         type: 'error',
-        message: 'Schema validation failed:',
-        errors: validation.errors
+        message: `JSON validation failed against the "${this._schemaName}" schema:`,
+        errors: validation.errors,
+        link: {
+          url: `https://da.live/apps/schema#/${this._org}/${this._site}/.da/forms/schemas/${this._schemaName}`,
+          text: 'Edit Schema'
+        }
       };
     } else {
       this._alert = { type: 'error', message: validation.error };
@@ -223,8 +227,12 @@ class ImportStructuredContent extends LitElement {
       if (validation.errors) {
         this._alert = {
           type: 'error',
-          message: 'Schema validation failed:',
-          errors: validation.errors
+          message: `JSON validation failed against the "${this._schemaName}" schema:`,
+          errors: validation.errors,
+          link: {
+            url: `https://da.live/apps/schema#/${this._org}/${this._site}/.da/forms/schemas/${this._schemaName}`,
+            text: 'Edit Schema'
+          }
         };
       } else {
         this._alert = { type: 'error', message: validation.error };
@@ -329,8 +337,9 @@ class ImportStructuredContent extends LitElement {
   renderSchemaSelect() {
     const schemaNames = Object.keys(this._schemas).sort();
     const hasSchemas = schemaNames.length > 0;
+    const schemaEditorUrl = `https://da.live/apps/schema#/${this._org}/${this._site}/.da/forms/schemas`;
     const hint = hasSchemas
-      ? `${schemaNames.length} schema${schemaNames.length > 1 ? 's' : ''} available`
+      ? html`${schemaNames.length} schema${schemaNames.length > 1 ? 's' : ''} available. <a href="${schemaEditorUrl}" target="_blank">Manage schemas</a>`
       : html`No schemas found. Verify that the Organization and Site are correct, or <a href="https://da.live/apps/schema" target="_blank">create a schema</a> first.`;
 
     return html`
@@ -374,8 +383,10 @@ class ImportStructuredContent extends LitElement {
               ${this.renderInput('site', 'Site', this._site, 'name-of-site', 'Target site')}
             </div>
 
-            ${this.renderInput('documentPath', 'Document Path', this._documentPath, '/forms/my-content', 'Path where the content will be saved')}
-            ${this.renderSchemaSelect()}
+            <div class="form-row">
+              ${this.renderSchemaSelect()}
+              ${this.renderInput('documentPath', 'Document Path', this._documentPath, '/forms/my-content', 'Path where the content will be saved')}
+            </div>
 
             <div class="form-group">
               <label for="json-data">JSON Data</label>
