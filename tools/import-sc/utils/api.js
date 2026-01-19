@@ -13,7 +13,7 @@ export async function loadSchemas(org, site, token) {
   if (!org) return { success: false, error: 'Organization is required' };
 
   try {
-    const schemasUrl = `${API_BASE_URL}/list/${org}/${site || ''}${SCHEMA_PATH}`.replace('//', '/');
+    const schemasUrl = `${API_BASE_URL}/list/${org}/${site}${SCHEMA_PATH}`;
     console.log('Loading schemas from:', schemasUrl);
 
     const response = await fetch(schemasUrl, {
