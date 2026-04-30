@@ -3,7 +3,7 @@
  */
 
 const API_BASE_URL = 'https://admin.da.page';
-const PREVIEW_BASE_URL = 'https://da-sc--da-live--adobe.aem.live';
+const PREVIEW_BASE_URL = 'https://da.live';
 const SCHEMA_PATH = '/.da/forms/schemas';
 
 function normalizeDocumentPath(documentPath) {
