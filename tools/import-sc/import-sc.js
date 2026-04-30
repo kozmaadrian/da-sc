@@ -3,7 +3,7 @@ import DA_SDK from 'https://da.live/nx/utils/sdk.js';
 import getStyle from 'https://da.live/nx/utils/styles.js';
 import { debounce } from './utils/helpers.js';
 import { validateAgainstSchema } from './utils/validators.js';
-import { generateStructuredHTML } from './utils/html-generator.js';
+import { serialise } from 'https://fix-reusable-serialiser--da-nx--adobe.aem.live/nx/blocks/form/utils/serialise.js';
 import { loadSchemas, fetchSchema, importToDA } from './utils/api.js';
 
 // Import CodeMirror
@@ -82,12 +82,27 @@ class ImportStructuredContent extends LitElement {
   }
 
   /**
+   * Normalizes destination path to ensure a leading slash.
+   * @param {string} documentPath
+   * @returns {string}
+   */
+  normalizeDocumentPath(documentPath) {
+    const trimmedPath = documentPath?.trim() || '';
+    if (!trimmedPath) return '';
+    return trimmedPath.startsWith('/') ? trimmedPath : `/${trimmedPath}`;
+  }
+
+  /**
    * Handles input field changes
    * @param {string} field - Field name
    * @param {string} value - Field value
    */
   handleFieldChange(field, value) {
-    this[`_${field}`] = value;
+    const normalizedValue = field === 'documentPath'
+      ? this.normalizeDocumentPath(value)
+      : value;
+
+    this[`_${field}`] = normalizedValue;
 
     // Reload schemas if org or site changes (debounced)
     if (field === 'org' || field === 'site') {
@@ -213,6 +228,19 @@ class ImportStructuredContent extends LitElement {
   }
 
   /**
+   * Extracts a title from the destination document path.
+   * Uses the final non-empty path segment without a .html suffix.
+   * @returns {string}
+   */
+  getDocumentTitle() {
+    const documentPath = this.normalizeDocumentPath(this._documentPath);
+    const segments = documentPath.split('/').filter(Boolean);
+    const lastSegment = segments[segments.length - 1] || '';
+    const title = lastSegment.replace(/\.html$/i, '');
+    return title || this._schemaName;
+  }
+
+  /**
    * Handles form submission
    * Validates JSON against schema, generates HTML, and imports to DA
    * @param {Event} event - Form submit event
@@ -242,7 +270,15 @@ class ImportStructuredContent extends LitElement {
 
     this._alert = { type: 'info', message: 'Importing content...' };
 
-    const htmlContent = generateStructuredHTML(this._schemaName, validation.data);
+    const htmlContent = serialise({
+      json: {
+        metadata: {
+          schemaName: this._schemaName,
+          title: this.getDocumentTitle(),
+        },
+        data: validation.data,
+      },
+    });
     const result = await importToDA(this._org, this._site, this._documentPath, htmlContent, this._token);
 
     if (result.success) {

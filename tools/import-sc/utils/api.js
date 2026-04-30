@@ -6,6 +6,12 @@ const API_BASE_URL = 'https://admin.da.page';
 const PREVIEW_BASE_URL = 'https://da-sc--da-live--adobe.aem.live';
 const SCHEMA_PATH = '/.da/forms/schemas';
 
+function normalizeDocumentPath(documentPath) {
+  const trimmedPath = documentPath?.trim() || '';
+  if (!trimmedPath) return '';
+  return trimmedPath.startsWith('/') ? trimmedPath : `/${trimmedPath}`;
+}
+
 /**
  * Loads schemas from DA API
  */
@@ -76,7 +82,10 @@ export async function fetchSchema(schemaPath, token) {
  */
 export async function importToDA(org, site, documentPath, htmlContent, token) {
   try {
-    const fullPath = documentPath.endsWith('.html') ? documentPath : `${documentPath}.html`;
+    const normalizedDocumentPath = normalizeDocumentPath(documentPath);
+    const fullPath = normalizedDocumentPath.endsWith('.html')
+      ? normalizedDocumentPath
+      : `${normalizedDocumentPath}.html`;
     const apiUrl = `${API_BASE_URL}/source/${org}/${site}${fullPath}`;
 
     const formData = new FormData();
@@ -94,7 +103,7 @@ export async function importToDA(org, site, documentPath, htmlContent, token) {
 
     return {
       success: true,
-      url: `${PREVIEW_BASE_URL}/form#/${org}/${site}${documentPath}`,
+      url: `${PREVIEW_BASE_URL}/form#/${org}/${site}${normalizedDocumentPath}`,
     };
   } catch (error) {
     console.error('Import error:', error);
